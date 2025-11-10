@@ -1,3 +1,5 @@
+model/user.js -
+
 import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema(
@@ -5,12 +7,15 @@ const userSchema = new mongoose.Schema(
     email: { type: String },
     password: { type: String },
     mobile_no: { type: String },
+    role: { type: String, enum: ["super_admin"], },
   },
   { timestamps: true }
 );
 export default mongoose.model("User", userSchema);
 
 ===========================================================
+
+controller/user.js -
 
 import { superAdminValidation } from "../validators/user.js";
 import { handleResponse } from "../utils/helper.js";
@@ -55,7 +60,10 @@ const registerSuperAdmin = async (req, res) => {
 };
 
 
+import { signAccessToken, signResetToken } from "../middleware/jwtAuth.js";
+
 ==================================================================
+validators/user.js - 
 
 import Joi from "joi";
 
@@ -68,6 +76,8 @@ export const superAdminValidation = Joi.object({
 
 ==============================================================
 
+routes/user.js -
+
 import express from "express";
 import { registerSuperAdmin } from "../controllers/user.js";
 
@@ -76,3 +86,252 @@ const router = express.Router();
 router.post("/super-admin", registerSuperAdmin);
 
 export default router;
+
+
+=====================================================
+
+
+controller/user.js -
+login -
+
+
+const loginUser = async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        // Find the super admin by email
+        const foundUser = await User.findOne({ email });
+
+        // If no super admin is found, return an error
+        if (!foundUser) {
+            return handleResponse(res, 401, 'Invalid email or password');
+        } 
+
+        // Ensure the user has a password set
+        if (!foundUser.password) {
+            return handleResponse(res, 401, 'User does not have a password set.');
+        }
+
+        // Compare the provided password with the stored password
+        const isMatch = await bcrypt.compare(password, foundUser.password);
+        if (!isMatch) {
+            return handleResponse(res, 401, 'Invalid email or password');
+        }
+
+        // Generate the JWT token
+        const token = await signAccessToken(foundUser._id, foundUser.role, foundUser.email);
+
+        // Prepare the response payload
+        const baseResponse = {
+            token,
+            role: foundUser.role,
+        };
+
+        // Return the response with the token and user details
+        return handleResponse(res, 200, 'Login successful.', baseResponse);
+
+    } catch (error) {
+        console.error('Login error:', error);
+        return handleResponse(res, 500, 'Internal server error.');
+    }
+};
+
+
+===
+
+middleware/jwtAuth.js -
+
+import jwt from "jsonwebtoken";
+
+
+export const signAccessToken = (user_id, user_role, email) => {
+  return jwt.sign(
+    {
+      user_id,
+      user_role,
+      email
+    },
+    process.env.ACCESS_TOKEN_SECRET,
+    { expiresIn: '7d' }
+  );
+};
+
+
+===
+routes/user.js - 
+
+router.post("/login", loginUser);
+
+===
+
+controllers/user.js-
+
+const forgotPassword = async (req, res) => {
+    const { email } = req.body;
+
+    try {
+        // Only allow SuperAdmin (assuming stored in 'User' collection)
+        const user = await User.findOne({ email, role: "SuperAdmin" });
+
+        if (!user) {
+            return handleResponse(res, 404, "No SuperAdmin found with this email address");
+        }
+
+        // Generate token with userId and role
+        const resetToken = await signResetToken({
+            email: user.email,
+            userId: user._id,
+            role: "SuperAdmin"
+        });
+
+        const resetLink = `${process.env.BASE_URL}/reset-password?token=${resetToken}`;  //BASE_URL=https://api.parkhya.co.in
+        const emailSubject = "SuperAdmin Password Reset Request";
+        const emailText = `Click the following link to reset your SuperAdmin password:\n\n${resetLink}`;
+
+        // Save token in user document
+        user.resetToken = resetToken;
+        user.resetTokenExpires = Date.now() + 3600000; // 1 hour
+        await user.save();
+
+        await sendEmail(user.email, emailSubject, emailText);
+
+        return handleResponse(res, 200, "Password reset email has been sent to SuperAdmin.");
+    } catch (error) {
+        console.error("Forgot Password Error (SuperAdmin):", error);
+        return handleResponse(res, 500, "Error processing request");
+    }
+};
+
+
+const resetPassword = async (req, res) => {
+    const { newPassword, confirmPassword } = req.body;
+    const token = req.headers['authorization']?.split(' ')[1];
+
+    if (!token) {
+        return handleResponse(res, 400, "Token not provided");
+    }
+
+    try {
+        if (newPassword !== confirmPassword) {
+            return handleResponse(res, 400, "New password and confirm password do not match");
+        }
+
+        // Verify reset token
+        const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);  //ACCESS_TOKEN_SECRET=ba345ae87dc79e1f212dc66e305118470bdff22d5f50974425983cd03ff25fc4d3d7087ac52127e9238dc276a5d9ad03515129eee6a5dfd9c30768b00837c16d
+
+        // Ensure only SuperAdmin can reset password
+        if (decoded.role !== "SuperAdmin") {
+            return handleResponse(res, 403, "Unauthorized: Only SuperAdmin can reset password");
+        }
+
+        // Find SuperAdmin user
+        const user = await User.findById(decoded.userId);
+
+        if (!user) {
+            return handleResponse(res, 404, "SuperAdmin not found");
+        }
+
+        // Validate token existence and expiry
+        if (!user.resetToken || user.resetToken !== token) {
+            return handleResponse(res, 400, "Invalid or expired token. Token can only be used once.");
+        }
+
+        if (user.resetTokenExpires < Date.now()) {
+            return handleResponse(res, 400, "Token has expired");
+        }
+
+        // Hash and update new password
+        try {
+            user.password = await bcrypt.hash(newPassword, 10);
+            user.resetToken = null;
+            user.resetTokenExpires = null;
+            await user.save();
+        } catch (err) {
+            console.error("Error while saving new SuperAdmin password:", err);
+            return handleResponse(res, 500, "Could not update password.");
+        }
+
+        return handleResponse(res, 200, "SuperAdmin password has been successfully reset.");
+    } catch (error) {
+        console.error("Error during SuperAdmin password reset:", error);
+        return handleResponse(res, 400, "Invalid or expired token");
+    }
+};
+
+middleware/jwtAuth.js -
+
+export const signAccessToken = (user_id, user_role, email) => {
+  return jwt.sign(
+    {
+      user_id,
+      user_role,
+      email
+    },
+    process.env.ACCESS_TOKEN_SECRET,
+    { expiresIn: '7d' }
+  );
+};
+
+export const signResetToken = ({ email, userId, role }) => {
+  return new Promise((resolve, reject) => {
+    const payload = { email, userId, role };
+    const options = { expiresIn: process.env.EXPIRATION_TIME || '1h' };
+
+    jwt.sign(payload, process.env.ACCESS_TOKEN_SECRET, options, (err, token) => {
+      if (err) reject(err);
+      resolve(token);
+    });
+  });
+};
+
+utils/emailhandler.js -
+
+import nodemailer from "nodemailer";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const transporter = nodemailer.createTransport({
+  host: process.env.SMPT_EMAIL_HOST,
+  port: Number(process.env.SMPT_EMAIL_PORT),
+  secure: true, 
+  auth: {
+    user: process.env.SMPT_EMAIL_USER,
+    pass: process.env.SMPT_EMAIL_PASSWORD,
+  },
+});
+
+const sendEmail = async (to, subject, htmlContent, bcc = null,textContent = null) => {
+  console.log("Sending email to:", to);
+   if (!to || (Array.isArray(to) && to.length === 0)) {
+    console.error("❌ Email not sent: No recipients defined");
+    return;
+  }
+
+  const mailOptions = {
+    from: process.env.SMPT_EMAIL_FROM,
+    to,
+    subject,
+    // html: htmlContent,
+  };
+
+  if (htmlContent) mailOptions.html = htmlContent;
+  if (textContent) mailOptions.text = textContent;
+
+  if (bcc) {
+    if (typeof bcc === "string") {
+      mailOptions.bcc = bcc.split(",").map(email => email.trim());
+    } else if (Array.isArray(bcc)) {
+      mailOptions.bcc = bcc;
+    }
+  }
+
+  try {
+    await transporter.sendMail(mailOptions);
+  } catch (error) {
+    console.error("Error sending email:", error);
+    throw new Error("Email sending failed");
+  }
+};
+
+export default sendEmail;
