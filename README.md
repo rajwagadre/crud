@@ -335,3 +335,50 @@ const sendEmail = async (to, subject, htmlContent, bcc = null,textContent = null
 };
 
 export default sendEmail;
+
+
+
+============================================================================
+for postman requests
+
+
+import express from "express";
+import multer from "multer";
+
+// 🔹 Configure multer for file uploads
+const upload = multer({ dest: "uploads/" }); // files will be saved in 'uploads' folder
+
+const setupRoutes = (app) => {
+  // 🔹 Dummy middleware to simulate a logged-in user (for testing req.User)
+  app.use((req, res, next) => {
+    // In real apps, you'd verify a token here and get user from DB
+    req.User = { _id: "6850fbbd1bef60ef1fcab80d", name: "Test User" };
+    next();
+  });
+
+  // 🔹 POST route
+  app.post("/submit/:id", upload.array("images", 5), (req, res) => {
+    // Access headers
+    console.log("req.headers ", req.headers);
+
+    // Access request body (form-data or JSON)
+    console.log("req.body ", req.body);
+
+    // Access query parameters (?search=hello)
+    console.log("req.query ", req.query);
+
+    // Access URL params (/submit/:id)
+    console.log("req.params ", req.params);
+
+    // Access uploaded files (if any)
+    console.log("req.files ", req.files);
+
+    // Access user information (simulated authenticated user)
+    console.log("req.User?._id ", req.User?._id);
+
+    res.send("Request received successfully!");
+  });
+};
+
+export default setupRoutes;
+======================================================
