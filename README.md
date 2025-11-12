@@ -515,3 +515,74 @@ const updateSchoolById = async (req, res) => {
     return handleResponse(res, 500, "An error occurred while updating the school.");
   }
 };
+
+
+
+====
+
+export const verifyToken = async (req, res, next) => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    if (!token) {
+      return handleResponse(res, 403, 'Access Denied. No token provided.');
+    }
+
+    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+
+    let user;
+
+    if (decoded.user_role === 'sub_admin') {
+      user = await SubAdmin.findById(decoded.user_id);
+    }
+
+    else if (decoded.user_role === 'Teacher') {
+      user = await teachers.findById(decoded.user_id).select("+school");
+    }
+
+    else if (decoded.user_role === 'student') {
+      user = await students.findById(decoded.user_id);
+    }
+
+    else if (decoded.user_role === 'school') {
+      user = await User.findById(decoded.user_id);
+      if (!user) {
+        const Demo = (await import('../models/demo.js')).default;
+        user = await Demo.findById(decoded.user_id);
+      }
+
+    } else if (decoded.user_role === 'driver') {
+      user = await Driver.findById(decoded.user_id); // ✅ Fix: added driver
+
+    }
+
+
+    else {
+      user = await User.findById(decoded.user_id);
+    }
+
+
+    if (!user) {
+      return handleResponse(res, 403, 'User not found.');
+    }
+
+    // req.user = user;
+    req.user = {
+      ...user.toObject?.() || user,
+      id: user._id ? user._id.toString() : undefined,
+      user_id: decoded.user_id,
+      user_role: decoded.user_role,
+      school: decoded.user_role === 'school' ? user._id : user.school
+    };
+
+    next();
+  } catch (error) {
+
+    if (error instanceof jwt.JsonWebTokenError) {
+      return handleResponse(res, 403, 'Invalid token. Please log in again.');
+    }
+    if (error instanceof jwt.TokenExpiredError) {
+      return handleResponse(res, 403, 'Token has expired. Please log in again.');
+    }
+    return handleResponse(res, 500, 'Internal server error.');
+  }
+};
