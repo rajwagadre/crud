@@ -424,3 +424,94 @@ const setupRoutes = (app) => {
 
 export default setupRoutes;
 
+======================================
+
+updated school
+
+const updateSchoolById = async (req, res) => {
+  try {
+    if (req.user.role !== "super_admin") {
+      return handleResponse(res, 403, "Only super admin can update school information.");
+    }
+
+    const { id } = req.params;
+    if (!id) {
+      return handleResponse(res, 400, "School ID is required.");
+    }
+
+    // Get the current school data from the database
+    const school = await User.findById(id);
+    if (!school) {
+      return handleResponse(res, 404, "School not found.");
+    }
+
+    // If admin_Username is not provided in the request body, use the existing one from the database
+    if (!req.body.admin_Username) {
+      req.body.admin_Username = school.admin_Username;
+    }
+
+    // Validate the incoming data
+    const { error } = updateSchoolValidation.validate(req.body, { abortEarly: false });
+    if (error) {
+      return handleResponse(res, 400, error.details.map((err) => err.message).join(", "));
+    }
+
+    const {
+      email, school_name, school_code, contact_number, mobile_no, address, city, state, pin_code, 
+      principal_name, school_type, school_board, established_year, total_students_capacity, website_url, 
+      admin_Username, status
+    } = req.body;
+
+    // Check if the admin_Username is already taken by another school
+    const existingSchool = await User.findOne({ admin_Username });
+    if (existingSchool && existingSchool._id.toString() !== school._id.toString()) {
+      return handleResponse(res, 400, "This admin_Username is already registered for another school.");
+    }
+
+    // Get the logo from the uploaded files
+    const logo = req.convertedFiles?.logo ? req.convertedFiles.logo[0] : undefined;
+
+    // Prepare the update fields
+    const updateFields = {};
+    if (email) updateFields.email = email;
+    if (school_name) updateFields.school_name = school_name;
+    if (school_code) updateFields.school_code = school_code;
+    if (contact_number) updateFields.contact_number = contact_number;
+    if (mobile_no) updateFields.mobile_no = mobile_no;
+    if (address) updateFields.address = address;
+    if (city) updateFields.city = city;
+    if (state) updateFields.state = state;
+    if (pin_code) updateFields.pin_code = pin_code;
+    if (principal_name) updateFields.principal_name = principal_name;
+    if (school_type) updateFields.school_type = school_type;
+    if (school_board) updateFields.school_board = school_board;
+    if (established_year) updateFields.established_year = established_year;
+    if (total_students_capacity) updateFields.total_students_capacity = total_students_capacity;
+    if (website_url) updateFields.website_url = website_url;
+    updateFields.admin_Username = admin_Username;  // This is required and will use the validated one
+    
+    if (logo) updateFields.logo = logo;
+
+    if (status !== undefined) {
+      updateFields.status = status;
+      updateFields.deleted = status ? false : true;
+    }
+
+    // Perform the update in the database
+    const updatedSchool = await User.findByIdAndUpdate(
+      id,
+      { $set: updateFields },
+      { new: true }
+    );
+
+    if (!updatedSchool) {
+      return handleResponse(res, 404, "School not found.");
+    }
+
+    return handleResponse(res, 200, "School updated successfully!", updatedSchool);
+
+  } catch (error) {
+    console.error(error);
+    return handleResponse(res, 500, "An error occurred while updating the school.");
+  }
+};
